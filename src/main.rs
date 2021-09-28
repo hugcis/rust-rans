@@ -77,13 +77,35 @@ impl SymbolStats {
             precomp: [PreCompSym::default(); 256],
         };
         stats.update_probs(probs);
+        stats.precomp();
         stats
     }
 
     fn precomp(&mut self) {
         for i in 0..256 {
-            self.precomp[i].freq = self.pdf[i];
-            self.precomp[i].cmpl_freq = (1 << PROB_BITS) - self.pdf[i];
+            let s = &mut self.precomp[i];
+            s.freq = self.pdf[i];
+            s.cmpl_freq = (1 << PROB_BITS) - self.pdf[i];
+            if self.pdf[i] < 2 {
+                s.rcp_freq = !0_u64;
+                s.rcp_shift = 0;
+                s.bias = self.cdf[i] + (1 << PROB_BITS) - 1;
+            } else {
+                let mut shift = 0;
+                while self.pdf[i] > (1 << shift) {
+                    shift += 1;
+                }
+                let mut x0: u64 = self.pdf[i] as u64 - 1;
+                let x1 = 1_u64 << (shift + 31);
+                let t1 = x1 / self.pdf[i] as u64;
+                x0 += (x1 % self.pdf[i] as u64) << 32;
+                let t0 = x0 / self.pdf[i] as u64;
+
+                s.rcp_freq = t0 + (t1 << 32);
+                s.rcp_shift = shift - 1;
+
+                s.bias = self.cdf[i];
+            }
         }
     }
 
@@ -163,6 +185,14 @@ impl ANSCoder {
         }
     }
 
+    fn new_precomp(probs: &[u32]) -> ANSCoder {
+        ANSCoder {
+            state: RANS64_L as u64,
+            encoded_data: vec![],
+            stats: SymbolStats::new_precomp(probs),
+        }
+    }
+
     fn encode_symbol(&mut self, symbol: u8) {
         let freq = self.stats.pdf[symbol as usize];
         let start = self.stats.cdf[symbol as usize];
@@ -176,6 +206,19 @@ impl ANSCoder {
         }
 
         self.state = ((x / freq as u64) << PROB_BITS) + (x % freq as u64) + start as u64;
+    }
+
+    fn encode_symbol_precomp(&mut self, symbol: u8) {
+        let pre = self.stats.precomp[symbol as usize];
+        let mut x: u64 = self.state;
+        let x_max = ((RANS64_L >> PROB_BITS) << 32) * pre.freq as u64;
+        if x >= x_max {
+            self.encoded_data.push(x as u32);
+            x >>= 32;
+        }
+
+        let q = ((((x as u128) * (pre.rcp_freq as u128)) >> 64) >> pre.rcp_shift) as u64;
+        self.state = x + pre.bias as u64 + q * pre.cmpl_freq as u64;
     }
 
     fn get_encoded(&mut self) -> Vec<u32> {
@@ -237,6 +280,7 @@ fn main() -> std::io::Result<()> {
     }
     let mut ans = ANSCoder::new_static(&probs);
 
+    println!("Normal");
     for _ in 0..5 {
         ans = ANSCoder::new_static(&probs);
         ans.encoded_data = Vec::with_capacity(data.len());
@@ -246,7 +290,23 @@ fn main() -> std::io::Result<()> {
         }
         let dur = now.elapsed();
         println!(
-            "{:.3} seconds elapsed, {:.5}MB/sec",
+            "{:.3} seconds elapsed, {:.3}MiB/sec",
+            dur.as_millis() as f64 / 1000.,
+            data.len() as f64 / (2_f64.powf(20.) * dur.as_nanos() as f64 / 1e9)
+        );
+    }
+
+    println!("Optimized");
+    for _ in 0..5 {
+        ans = ANSCoder::new_precomp(&probs);
+        ans.encoded_data = Vec::with_capacity(data.len());
+        let now = Instant::now();
+        for symbol in data.iter() {
+            ans.encode_symbol_precomp(*symbol);
+        }
+        let dur = now.elapsed();
+        println!(
+            "{:.3} seconds elapsed, {:.3}MiB/sec",
             dur.as_millis() as f64 / 1000.,
             data.len() as f64 / (2_f64.powf(20.) * dur.as_nanos() as f64 / 1e9)
         );
