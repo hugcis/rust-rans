@@ -112,28 +112,18 @@ impl SymbolStats {
                     }
                 }
 
-                assert_ne!(best_steal, -1);
-
                 if (best_steal as usize) < i {
                     for j in (best_steal + 1) as usize..=i {
                         self.cdf[j] -= 1;
                     }
                 } else {
-                    assert_eq!(best_steal > i as i16, true);
                     for j in i + 1..=best_steal as usize {
                         self.cdf[j] += 1;
                     }
                 }
             }
         }
-        assert_eq!(self.cdf[0], 0);
-        assert_eq!(self.cdf[256], target_total);
         for i in 0..256 {
-            if probs[i] == 0 {
-                assert_eq!(self.cdf[i + 1], self.cdf[i]);
-            } else {
-                assert_eq!(self.cdf[i + 1] > self.cdf[i], true);
-            }
             // calc updated freq
             self.pdf[i] = self.cdf[i + 1] - self.cdf[i];
         }
@@ -246,7 +236,7 @@ fn main() -> std::io::Result<()> {
         }
         let dur = now.elapsed();
         println!(
-            "{} seconds elapsed, {:.5}MB/sec",
+            "{:.3} seconds elapsed, {:.5}MB/sec",
             dur.as_millis() as f64 / 1000.,
             data.len() as f64 / (2_f64.powf(20.) * dur.as_nanos() as f64 / 1e9)
         );
@@ -266,6 +256,7 @@ fn main() -> std::io::Result<()> {
     decoded_data = decoded_data.into_iter().rev().collect();
 
     assert_eq!(data.len(), decoded_data.len());
+    println!("Decoding ok!");
     Ok(())
 }
 
