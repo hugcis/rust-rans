@@ -280,7 +280,7 @@ fn main() -> std::io::Result<()> {
     }
     let mut ans = ANSCoder::new_static(&probs);
 
-    println!("Normal");
+    println!("Normal:");
     for _ in 0..5 {
         ans = ANSCoder::new_static(&probs);
         ans.encoded_data = Vec::with_capacity(data.len());
@@ -290,13 +290,13 @@ fn main() -> std::io::Result<()> {
         }
         let dur = now.elapsed();
         println!(
-            "{:.3} seconds elapsed, {:.3}MiB/sec",
+            "\t{:.3} seconds elapsed, {:.3}MiB/sec",
             dur.as_millis() as f64 / 1000.,
             data.len() as f64 / (2_f64.powf(20.) * dur.as_nanos() as f64 / 1e9)
         );
     }
 
-    println!("Optimized");
+    println!("Optimized:");
     for _ in 0..5 {
         ans = ANSCoder::new_precomp(&probs);
         ans.encoded_data = Vec::with_capacity(data.len());
@@ -306,7 +306,7 @@ fn main() -> std::io::Result<()> {
         }
         let dur = now.elapsed();
         println!(
-            "{:.3} seconds elapsed, {:.3}MiB/sec",
+            "\t{:.3} seconds elapsed, {:.3}MiB/sec",
             dur.as_millis() as f64 / 1000.,
             data.len() as f64 / (2_f64.powf(20.) * dur.as_nanos() as f64 / 1e9)
         );
