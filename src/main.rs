@@ -1,13 +1,9 @@
-use rand::Rng;
-use std::convert::TryInto;
 use std::fs::File;
 use std::io::Read;
 use std::time::Instant;
 
-const PROB_BITS: u64 = 14;
-const MIN_PROB: u64 = 8;
+const PROB_BITS: u32 = 14;
 const RANS64_L: u64 = 1 << 31;
-const MAX_PROB: u64 = (RANS64_L >> PROB_BITS) << 32;
 
 type RansState = u64;
 
@@ -15,141 +11,211 @@ fn vec_compare_f64(va: &[f64], vb: &[f64]) -> bool {
     va.iter().zip(vb).all(|(a, b)| (a - b).abs() < 1E-12)
 }
 
-fn find_in_int_dist(cdf: &[u64], to_find: u64) -> Result<u64, String> {
-    (0..cdf.len() - 1)
-        .into_iter()
-        .find(|&i| (cdf[i] <= to_find) && (cdf[i + 1] > to_find))
-        .map(|x| x as u64)
-        .ok_or_else(|| "Error finding symbol in dist".to_string())
+fn find_in_int_dist(cdf: &[u32], to_find: u64) -> u64 {
+    let mut r = 0;
+    for i in 0..255 {
+        if (cdf[i + 1] as u64 > to_find) && (cdf[i] as u64 <= to_find) {
+            r = i as u64;
+            break;
+        }
+    }
+    r
 }
 
-struct FloatToInt {
-    pdf: Vec<u64>,
-    cdf: Vec<u64>,
-    probs: Vec<f64>,
-    memoize: bool,
+enum Mode {
+    STATIC,
+    PRECOMP,
+    DYN,
 }
 
-impl FloatToInt {
-    fn new() -> FloatToInt {
-        FloatToInt {
-            pdf: vec![],
-            cdf: vec![],
-            probs: vec![],
-            memoize: true,
+#[derive(Default, Clone, Copy)]
+struct PreCompSym {
+    rcp_freq: u64,
+    freq: u32,
+    bias: u32,
+    cmpl_freq: u32,
+    rcp_shift: u32,
+}
+
+struct SymbolStats {
+    pdf: [u32; 256],
+    cdf: [u32; 257],
+    probs: [u32; 256],
+    model_mode: Mode,
+    precomp: [PreCompSym; 256],
+}
+
+impl SymbolStats {
+    fn new() -> SymbolStats {
+        SymbolStats {
+            pdf: [0; 256],
+            cdf: [0; 257],
+            probs: [0; 256],
+            model_mode: Mode::DYN,
+            precomp: [PreCompSym::default(); 256],
         }
     }
 
-    fn float_to_int_probs(&mut self, float_probs: &[f64]) -> (&[u64], &[u64]) {
-        if self.memoize && (float_probs.len() != self.probs.len())
-            || !vec_compare_f64(float_probs, &self.probs)
-        {
-            let (pdf, cdf) = self.new_float_to_int_probs(float_probs);
-            self.pdf = pdf;
-            self.cdf = cdf;
-            self.probs = float_probs.to_vec();
-        }
-        (&self.pdf, &self.cdf)
+    fn new_static(probs: &[u32]) -> SymbolStats {
+        let mut stats = SymbolStats {
+            pdf: [0; 256],
+            cdf: [0; 257],
+            probs: [0; 256],
+            model_mode: Mode::STATIC,
+            precomp: [PreCompSym::default(); 256],
+        };
+        stats.update_probs(probs);
+        stats
     }
 
-    fn new_float_to_int_probs(&mut self, float_probs: &[f64]) -> (Vec<u64>, Vec<u64>) {
-        let mut pdf = vec![];
-        let mut cdf = vec![0];
+    fn new_precomp(probs: &[u32]) -> SymbolStats {
+        let mut stats = SymbolStats {
+            pdf: [0; 256],
+            cdf: [0; 257],
+            probs: [0; 256],
+            model_mode: Mode::STATIC,
+            precomp: [PreCompSym::default(); 256],
+        };
+        stats.update_probs(probs);
+        stats
+    }
 
-        for prob in float_probs.iter() {
-            let mut next_prob: u64 = (prob * (1 << PROB_BITS) as f64) as u64;
-            if prob > &0. && next_prob < MIN_PROB {
-                next_prob = MIN_PROB;
+    fn precomp(&mut self) {
+        for i in 0..256 {
+            self.precomp[i].freq = self.pdf[i];
+            self.precomp[i].cmpl_freq = (1 << PROB_BITS) - self.pdf[i];
+        }
+    }
+
+    fn update_probs(&mut self, probs: &[u32]) {
+        let target_total = 1 << PROB_BITS;
+        self.probs.clone_from_slice(probs);
+        self.cdf[1..].clone_from_slice(&self.probs);
+        self.cdf.iter_mut().fold(0, |acc, x| {
+            *x += acc;
+            *x
+        });
+        let total = self.cdf[self.cdf.len() - 1];
+        for x in self.cdf.iter_mut().skip(1) {
+            *x = ((*x as u64) * (target_total as u64) / total as u64) as u32;
+        }
+        for i in 0..256 {
+            if probs[i] > 0 && (self.cdf[i + 1] == self.cdf[i]) {
+                let mut best_freq = !0;
+                let mut best_steal = -1;
+
+                for j in 0..256 {
+                    let freq = self.cdf[j + 1] - self.cdf[j];
+                    if freq > 1 && freq < best_freq {
+                        best_freq = freq;
+                        best_steal = j as i16;
+                    }
+                }
+
+                assert_ne!(best_steal, -1);
+
+                if (best_steal as usize) < i {
+                    for j in (best_steal + 1) as usize..=i {
+                        self.cdf[j] -= 1;
+                    }
+                } else {
+                    assert_eq!(best_steal > i as i16, true);
+                    for j in i + 1..=best_steal as usize {
+                        self.cdf[j] += 1;
+                    }
+                }
             }
-            pdf.push(next_prob);
-            cdf.push(cdf.last().unwrap() + next_prob);
         }
-
-        let to_correct = (1 << PROB_BITS) - cdf.last().unwrap();
-        let largest_idx = pdf
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, &value)| value)
-            .map(|(idx, _)| idx)
-            .unwrap();
-        pdf[largest_idx] += to_correct;
-
-        for val in cdf.iter_mut().skip(largest_idx + 1) {
-            *val += to_correct;
+        assert_eq!(self.cdf[0], 0);
+        assert_eq!(self.cdf[256], target_total);
+        for i in 0..256 {
+            if probs[i] == 0 {
+                assert_eq!(self.cdf[i + 1], self.cdf[i]);
+            } else {
+                assert_eq!(self.cdf[i + 1] > self.cdf[i], true);
+            }
+            // calc updated freq
+            self.pdf[i] = self.cdf[i + 1] - self.cdf[i];
         }
-
-        (pdf, cdf)
     }
 }
 
 struct ANSCoder {
     state: u64,
-    encoded_data: Vec<u64>,
-    float_to_int: FloatToInt,
+    encoded_data: Vec<u32>,
+    stats: SymbolStats,
 }
 
 impl ANSCoder {
     fn new() -> ANSCoder {
         ANSCoder {
-            state: RANS64_L,
+            state: RANS64_L as u64,
             encoded_data: vec![],
-            float_to_int: FloatToInt::new(),
+            stats: SymbolStats::new(),
         }
     }
 
-    fn encode_symbol(&mut self, freqs: &[f64], symbol: u8) {
-        let (pdf, cdf) = self.float_to_int.float_to_int_probs(&freqs);
-        let freq = pdf[symbol as usize];
-        let start = cdf[symbol as usize];
+    fn new_static(probs: &[u32]) -> ANSCoder {
+        ANSCoder {
+            state: RANS64_L as u64,
+            encoded_data: vec![],
+            stats: SymbolStats::new_static(probs),
+        }
+    }
 
-        let mut x = self.state;
-        let x_max = MAX_PROB * freq;
+    fn encode_symbol(&mut self, symbol: u8) {
+        let freq = self.stats.pdf[symbol as usize];
+        let start = self.stats.cdf[symbol as usize];
+
+        let mut x: u64 = self.state;
+        let x_max = ((RANS64_L >> PROB_BITS) << 32) * freq as u64;
 
         if x >= x_max {
-            self.encoded_data.push(x & 0xffffffff);
+            self.encoded_data.push(x as u32);
             x >>= 32;
         }
 
-        self.state = ((x / freq) << PROB_BITS) + (x % freq) + start;
+        self.state = ((x / freq as u64) << PROB_BITS) + (x % freq as u64) + start as u64;
     }
 
-    fn get_encoded(&mut self) -> Vec<u64> {
-        self.encoded_data.push(self.state & 0xffffffff);
+    fn get_encoded(&mut self) -> Vec<u32> {
+        self.encoded_data.push(self.state as u32);
         self.state >>= 32;
-        self.encoded_data.push(self.state & 0xffffffff);
+        self.encoded_data.push(self.state as u32);
         self.encoded_data.clone()
     }
 }
 
 struct ANSDecoder {
     state: u64,
-    encoded_data: Vec<u64>,
-    float_to_int: FloatToInt,
+    encoded_data: Vec<u32>,
+    float_to_int: SymbolStats,
 }
 
 impl ANSDecoder {
-    fn new(mut encoded_data: Vec<u64>) -> ANSDecoder {
+    fn new(mut encoded_data: Vec<u32>) -> ANSDecoder {
         ANSDecoder {
-            state: (encoded_data.pop().unwrap() << 32) | encoded_data.pop().unwrap(),
+            state: ((encoded_data.pop().unwrap() as u64) << 32)
+                | encoded_data.pop().unwrap() as u64,
             encoded_data,
-            float_to_int: FloatToInt::new(),
+            float_to_int: SymbolStats::new(),
         }
     }
 
-    fn decode_symbol(&mut self, freqs: Vec<f64>) -> Result<u64, String> {
-        let (pdf, cdf) = self.float_to_int.float_to_int_probs(&freqs);
+    fn decode_symbol(&mut self) -> Result<u64, String> {
+        let (pdf, cdf) = (&self.float_to_int.pdf, &self.float_to_int.cdf);
         let to_find = self.state & ((1 << PROB_BITS) - 1);
-        let symbol = find_in_int_dist(cdf, to_find)?;
+        let symbol = find_in_int_dist(cdf, to_find);
 
         let start = cdf[symbol as usize];
         let freq = pdf[symbol as usize];
 
         let mask = (1 << PROB_BITS) - 1;
         let mut x = self.state;
-        x = freq * (x >> PROB_BITS) + (x & mask) - start;
+        x = freq as u64 * (x >> PROB_BITS) + (x & mask) - start as u64;
 
         if x < RANS64_L {
-            x = (x << 32) | self.encoded_data.pop().unwrap()
+            x = (x << 32) | self.encoded_data.pop().unwrap() as u64
         }
         self.state = x;
 
@@ -159,25 +225,24 @@ impl ANSDecoder {
 
 fn main() -> std::io::Result<()> {
     println!("Hello, world!");
-    let mut ans = ANSCoder::new();
-    let mut rng = rand::thread_rng();
-    let mut probs = vec![0.; 256];
+    let mut probs = vec![0; 256];
 
     let mut data: Vec<u8> = vec![];
+
     let mut f = File::open("book1")?;
     f.read_to_end(&mut data)?;
+
     for c in data.iter() {
-        probs[*c as usize] += 1.;
+        probs[*c as usize] += 1;
     }
-    let sum = probs.iter().sum::<f64>();
-    for p in probs.iter_mut() {
-        *p /= sum;
-    }
+    let mut ans = ANSCoder::new_static(&probs);
+
     for _ in 0..5 {
-        ans = ANSCoder::new();
+        ans = ANSCoder::new_static(&probs);
+        ans.encoded_data = Vec::with_capacity(data.len());
         let now = Instant::now();
         for symbol in data.iter() {
-            ans.encode_symbol(&probs, *symbol);
+            ans.encode_symbol(*symbol);
         }
         let dur = now.elapsed();
         println!(
@@ -189,11 +254,14 @@ fn main() -> std::io::Result<()> {
 
     let encoded = ans.get_encoded();
     println!("Encoded data size {}", encoded.len() * 4);
+
     let mut decoder = ANSDecoder::new(encoded);
+    decoder.float_to_int = ans.stats;
     let mut decoded_data = vec![];
     let length_decoded = data.len();
+
     for _ in 0..length_decoded {
-        decoded_data.push(decoder.decode_symbol(probs.to_vec()).unwrap())
+        decoded_data.push(decoder.decode_symbol().unwrap())
     }
     decoded_data = decoded_data.into_iter().rev().collect();
 
@@ -214,15 +282,14 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut ans = ANSCoder::new();
         let probs = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125];
-        let mut data: Vec<u64> = vec![];
+        let mut data: Vec<u8> = vec![];
 
         for _ in 0..10000 {
             data.push(rng.gen_range(0..8));
         }
 
         for symbol in data.iter() {
-            ans.encode_symbol(&probs, (*symbol).try_into().unwrap())
-                .unwrap();
+            ans.encode_symbol(*symbol)
         }
 
         let encoded = ans.get_encoded();
@@ -230,7 +297,7 @@ mod tests {
         let mut decoded_data = vec![];
         let length_decoded = data.len();
         for _ in 0..length_decoded {
-            decoded_data.push(decoder.decode_symbol(probs.to_vec()).unwrap())
+            decoded_data.push(decoder.decode_symbol().unwrap())
         }
         decoded_data = decoded_data.into_iter().rev().collect();
 
