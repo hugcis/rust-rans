@@ -102,6 +102,8 @@ mod tests {
     fn encode_decode() {
         let mut rng = rand::thread_rng();
         let mut ans = ANSCoder::new();
+        let probs = vec![1; 256];
+        ans.stats.update_probs(&probs);
         let mut data: Vec<u8> = vec![];
 
         for _ in 0..10000 {
@@ -114,6 +116,7 @@ mod tests {
 
         let encoded = ans.get_encoded();
         let mut decoder = ANSDecoder::new(encoded);
+        decoder.stats = ans.stats;
         let mut decoded_data = vec![];
         let length_decoded = data.len();
         for _ in 0..length_decoded {
