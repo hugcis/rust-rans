@@ -95,13 +95,13 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
     use crate::*;
 
     #[test]
     fn encode_decode() {
         let mut rng = rand::thread_rng();
         let mut ans = ANSCoder::new();
-        let probs = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125];
         let mut data: Vec<u8> = vec![];
 
         for _ in 0..10000 {
