@@ -1,4 +1,5 @@
 # Rust rANS
+![Cargo test badge](https://github.com/hugcis/rust-rans/actions/workflows/rust.yml/badge.svg)
 
 This is a Rust implementation of the range variant of Asymmetric numeral systems
 (ANS). It is based on [rygorous'
