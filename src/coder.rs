@@ -14,13 +14,14 @@ fn find_in_int_dist(cdf: &[u32], to_find: u64) -> u64 {
     r
 }
 
+#[derive(Debug)]
 enum Mode {
     Static,
     Precomp,
     Dyn,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 struct PreCompSym {
     rcp_freq: u64,
     freq: u32,
@@ -29,12 +30,20 @@ struct PreCompSym {
     rcp_shift: u32,
 }
 
+/// An object holding all of the statistics for our input symbols
+#[derive(Debug)]
 pub struct SymbolStats {
     pdf: [u32; 256],
     cdf: [u32; 257],
     probs: [u32; 256],
     model_mode: Mode,
     precomp: [PreCompSym; 256],
+}
+
+impl Default for SymbolStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SymbolStats {
@@ -180,32 +189,45 @@ impl SymbolStats {
     }
 }
 
+/// The encoder using Asymmetric Numeral systems
+#[derive(Debug)]
 pub struct ANSCoder {
     state: RansState,
+    /// The encoded data so far
     pub encoded_data: Vec<u32>,
+    /// The current symbol statistics
     pub stats: SymbolStats,
 }
 
+impl Default for ANSCoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ANSCoder {
+    /// Create a new empty coder
     pub fn new() -> ANSCoder {
         ANSCoder {
-            state: RANS64_L as RansState,
+            state: RANS64_L,
             encoded_data: vec![],
             stats: SymbolStats::new(),
         }
     }
 
+    /// Create a new coder with precomputed probabilities
     pub fn new_static(probs: &[u32]) -> ANSCoder {
         ANSCoder {
-            state: RANS64_L as RansState,
+            state: RANS64_L,
             encoded_data: vec![],
             stats: SymbolStats::new_static(probs),
         }
     }
 
+    /// Create a new coder with precomputed probabilities
     pub fn new_precomp(probs: &[u32]) -> ANSCoder {
         ANSCoder {
-            state: RANS64_L as RansState,
+            state: RANS64_L,
             encoded_data: vec![],
             stats: SymbolStats::new_precomp(probs),
         }
@@ -256,13 +278,18 @@ impl ANSCoder {
     }
 }
 
+/// The decoder object
+#[derive(Debug)]
 pub struct ANSDecoder {
     state: u64,
+    /// The previously encoded data to be decoded
     pub encoded_data: Vec<u32>,
+    /// The statistics of the input symbols
     pub stats: SymbolStats,
 }
 
 impl ANSDecoder {
+    /// Create a new decoder from encoded data
     pub fn new(mut encoded_data: Vec<u32>) -> ANSDecoder {
         ANSDecoder {
             state: ((encoded_data.pop().unwrap() as u64) << 32)
