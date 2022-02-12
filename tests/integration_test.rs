@@ -1,3 +1,4 @@
+#![feature(test)]
 use rand::Rng;
 use std::fs::File;
 use std::io::Read;
@@ -38,6 +39,7 @@ fn encode_decode_random() {
     assert_eq!(data.len(), decoded_data.len());
     assert_eq!(vec_compare(&data, &decoded_data), true);
 }
+
 #[test]
 fn decode_book1() {
     let mut data: Vec<u8> = vec![];

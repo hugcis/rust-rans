@@ -34,7 +34,24 @@
 //! ```
 //! ## Decoding
 //!
-//! ```ignore
+//! ```
+//! # use rans::ANSCoder;
+//! # use std::fs::File;
+//! # use std::io::Read;
+//! # let mut data: Vec<u8> = vec![];
+//! # // Read test file
+//! # let mut f = File::open("book1").unwrap();
+//! # f.read_to_end(&mut data).unwrap();
+//! # // Compute probablities for every token in the document
+//! # let mut probs = vec![0; 256];
+//! # for c in data.iter() {
+//! #     probs[*c as usize] += 1;
+//! # }
+//! # let mut ans = ANSCoder::new_static(&probs);
+//! # for symbol in data.iter() {
+//! #   ans.encode_symbol(*symbol);
+//! # }
+//! # let encoded = ans.get_encoded();
 //! use rans::ANSDecoder;
 //! // Construct decoder with the same stats object as the encoder
 //! let mut decoder = ANSDecoder::new(encoded);
@@ -49,8 +66,7 @@
 //! ```
 
 
-
-/// A good module
+/// The coder module with an encoder and a decoder
 mod coder;
 
 pub use crate::coder::{ANSCoder, ANSDecoder};
