@@ -1,4 +1,3 @@
-#![feature(test)]
 use rand::Rng;
 use std::fs::File;
 use std::io::Read;
